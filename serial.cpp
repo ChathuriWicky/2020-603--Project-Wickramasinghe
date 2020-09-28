@@ -48,6 +48,14 @@ void print_weights(int rows, int cols, float* array){
   }
 }
 
+void print_weights(int rows, int cols, int* array){
+  for(int i = 0; i< rows; i++){
+      for(int j=0; j< cols ; j++){
+        printf("%d " , array[i* cols + j]);
+      }
+    printf("\n");
+  }
+}
 
 int main(int argc, char *argv[]){
 
@@ -117,12 +125,12 @@ int main(int argc, char *argv[]){
 		lrate=0.49;
 		som_dim = 8; //number of neuron in one dimention
 		neu_dim = no_of_features; // input chanels per neuron,kernel size
-		radius=somDim/2.0;
+		radius=som_dim/2.0;
 		weights = (float*)malloc(som_dim*som_dim * neu_dim * sizeof(float));//number of neurons
 		classList = (int*)malloc(som_dim*som_dim * sizeof(int));
 		for(int i = 0; i< som_dim*som_dim; i++){
 				for(int j=0; j< no_of_features; j++){
-					weights[i* neuDim + j] = 0.0 + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(1.0-0.0)));; // initializing to a random weight
+					weights[i* neu_dim + j] = 0.0 + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(1.0-0.0)));; // initializing to a random weight
 				}
         classList[i] =0 ;
 		}
@@ -135,7 +143,8 @@ int main(int argc, char *argv[]){
         }
 		}
 
-    print_weights(somDim*somDim, neuDim, weights);
+    //print_weights(som_dim*som_dim, neu_dim, weights);
+    print_weights(som_dim*som_dim, noOfClasses, hitmap);
 
     return 0;
 }

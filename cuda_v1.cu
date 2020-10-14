@@ -83,7 +83,7 @@ __global__ void kernel2(float *d_traindate, float *d_weight_matrix, int *d_bmu, 
 
     int currR=tid/som_dim;
     int currC=(tid%som_dim);
-    float alpha = 0.49; //expf(- sqrt( ((winR-currR)*(winR-currR)) + ((winC-currC)*(winC-currC)) ) / (2*radius*radius));
+    float alpha = exp(- sqrt( ((winR-currR)*(winR-currR)) + ((winC-currC)*(winC-currC)) ) / (2*radius*radius));
     for(int j=0; j<no_of_features ; j++){
         d_weight_matrix[tid* no_of_features+ j]=d_weight_matrix[tid* no_of_features+ j] + ( lrate* alpha *( d_traindate[row* no_of_features + j]-d_weight_matrix[tid* no_of_features+ j]));
     }

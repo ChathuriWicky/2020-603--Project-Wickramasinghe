@@ -61,28 +61,28 @@ void print_hits(int rows, int cols, float* array){
 
 __global__ void kernel1(float *d_traindate, float *d_weight_matrix, int datapoint, float *d_radius,float *d_lrate, float *d_distances,int *d_bmu, int no_of_training_data, int no_of_features, int no_of_neurons){
     int tid = blockDim.x* blockIdx.x + threadIdx.x;
-    float distance=0.0;
-    for(int i=0; i< no_of_features; i++){
-        distance+= abs (d_traindate[datapoint* no_of_features +i] - d_weight_matrix[tid * no_of_features + i ]);
-    }
-
-    d_distances[tid]=distance;
-    __syncthreads();
-    if(tid == 0){
-      int temp_min_dis=100000;
-      int temp_bmu=0;
-      for(int i=0;i<no_of_neurons;i++){
-        if(d_distances[i]<temp_min_dis){
-          temp_min_dis = d_distances[i];
-          temp_bmu = i;
-        }
+    if(tid< no_of_neurons){
+      float distance=0.0;
+      for(int i=0; i< no_of_features; i++){
+          distance+= abs (d_traindate[datapoint* no_of_features +i] - d_weight_matrix[tid * no_of_features + i ]);
       }
-      *d_bmu = temp_bmu;
-      //printf(" cuda bmu = %d", *d_bmu);
+
+      d_distances[tid]=distance;
+      __syncthreads();
+      if(tid == 0){
+        int temp_min_dis=100000;
+        int temp_bmu=0;
+        for(int i=0;i<no_of_neurons;i++){
+          if(d_distances[i]<temp_min_dis){
+            temp_min_dis = d_distances[i];
+            temp_bmu = i;
+          }
+        }
+        *d_bmu = temp_bmu;
+      }
 
     }
-    //printf("%f ", distance);
-    //*d_lrate=0.3;
+
 }
 
 __global__ void kernel2(float *d_traindate, float *d_weight_matrix, int *d_bmu,  int no_of_features, float *d_lrate, float *d_radius, int som_dim, int row){
@@ -107,9 +107,7 @@ __global__ void kernel2(float *d_traindate, float *d_weight_matrix, int *d_bmu, 
 __global__ void kernel4(float *d_traindate, float *d_traindate_class, float *d_hitmap,  float *d_weight_matrix, int datapoint,  float *d_distances,int *d_bmu, int no_of_features, int no_of_neurons, int no_of_classes, int label){
 
       int tid = blockDim.x* blockIdx.x + threadIdx.x;
-      //
       if(tid< no_of_neurons){
-        //printf(",%d",tid);
         float distance=0.0;
         for(int i=0; i< no_of_features; i++){
             distance+= abs (d_traindate[datapoint* no_of_features +i] - d_weight_matrix[tid * no_of_features + i ]);
@@ -118,7 +116,6 @@ __global__ void kernel4(float *d_traindate, float *d_traindate_class, float *d_h
         d_distances[tid]=distance;
         __syncthreads();
         if(tid == 0){
-
             int temp_min_dis=100000;
             int temp_bmu=0;
             for(int i=0;i<no_of_neurons;i++){
@@ -128,13 +125,62 @@ __global__ void kernel4(float *d_traindate, float *d_traindate_class, float *d_h
               }
             }
             d_hitmap[temp_bmu  * no_of_classes + label] = d_hitmap[temp_bmu  * no_of_classes + label] +1;
-            
         }
-
       }
 
 }
 
+__global__ void kernel5(float *hitmap, int no_of_features, int no_of_neurons,float *d_class_list, int no_of_classes){
+
+      int tid = blockDim.x* blockIdx.x + threadIdx.x;
+      if(tid< no_of_neurons){
+        int max=0;
+        int max_idx=0;
+
+            for(int col=0; col< no_of_classes; col++){
+                if(hitmap[tid  * no_of_classes + col] >= max){
+                    max = hitmap[tid  * no_of_classes + col];
+                    max_idx = col;
+                }
+            }
+            d_class_list[tid] = max_idx;
+      }
+
+}
+
+__global__ void kernel6( float *d_traindate, float *d_traindata_class, float *d_weight_matrix, int no_of_features, int no_of_neurons,float *d_class_list,int no_of_classes, float *d_predicted_labels, int no_of_training_data){
+      int tid = blockDim.x* blockIdx.x + threadIdx.x;
+      if(tid< no_of_training_data){
+
+        float min_dis=100000.0;
+        int min_idx=-1;
+        float distance=0;
+        for(int neu=0; neu<no_of_neurons; neu++){
+            distance=0.0;
+            for(int col=0; col< no_of_features; col++){
+                distance += abs( d_traindate[tid* no_of_features + col] - d_weight_matrix[ neu * no_of_features + col]) ;
+            }
+            if(distance<=min_dis){
+                min_dis = distance;
+                min_idx = neu;
+            }
+        }
+        d_predicted_labels[tid]=0;
+        if(d_traindata_class[tid]== d_class_list[min_idx]){
+            d_predicted_labels[tid]=1;
+        }
+        __syncthreads();
+        if(tid == 0){
+          float sum=0;
+          for(int d=0; d<no_of_training_data; d++){
+            sum+=d_predicted_labels[d];
+          }
+          printf("\n Tarin acc in Kernel %f ", sum/no_of_training_data);
+
+        }
+
+      }
+}
 
 int main(int argc, char *argv[]){
 
@@ -142,7 +188,6 @@ int main(int argc, char *argv[]){
     int som_dim, neu_dim;// SOM network size, neuDim
     float *weight_matrix; //weight matrix
     float *lrate=(float*)malloc(1*sizeof(float));
-
     float *radius=(float*)malloc(1*sizeof(float));
     int epoches;
     int bmu;
@@ -158,7 +203,7 @@ int main(int argc, char *argv[]){
 
     cout << "SOM data loading no_of_training_data " << no_of_training_data << endl;
     cout << endl;
-
+    cout << "Loading Data" <<endl;
     std::ifstream file("traindata.csv");
     float *traindata= (float*) malloc (no_of_training_data * no_of_features * sizeof(float));
     for(int row = 0; row < no_of_training_data; row++)
@@ -231,9 +276,8 @@ int main(int argc, char *argv[]){
     }
 
     //device variables
-
     float *d_lrate,*d_radius, *d_weight_matrix, *d_distances, *d_traindate;
-    float *d_class_list, *d_hit_map, *d_traindata_class;
+    float *d_class_list, *d_hit_map, *d_traindata_class, *d_predicted_labels;
     int *d_bmu;
     cudaMalloc(&d_lrate, 1 * sizeof(float));
     cudaMalloc(&d_radius, 1 * sizeof(float));
@@ -244,11 +288,13 @@ int main(int argc, char *argv[]){
     cudaMalloc(&d_hit_map, no_of_neurons* no_of_classes* sizeof(float));
     cudaMalloc(&d_traindate, no_of_training_data* no_of_features * sizeof(float));
     cudaMalloc(&d_traindata_class, no_of_training_data*1* sizeof(float));
+    cudaMalloc(&d_predicted_labels, no_of_training_data*1* sizeof(float));
 
 
 
     cudaMemcpy(d_traindate, traindata, no_of_training_data* no_of_features * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_traindata_class, traindata_class, no_of_training_data*1 * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_predicted_labels, traindata_class, no_of_training_data*1 * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_weight_matrix, weight_matrix, no_of_neurons* no_of_features * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_distances, h_distance_list, no_of_neurons * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_class_list, traindata_class, no_of_training_data * sizeof(float), cudaMemcpyHostToDevice);
@@ -289,7 +335,9 @@ int main(int argc, char *argv[]){
             cudaMemcpy(h_distance_list, d_distances, no_of_neurons * sizeof(float), cudaMemcpyDeviceToHost);
             cudaEventRecord(stop);
             cudaEventSynchronize(stop);
+
             /*
+            //Serial
             int temp_min_dis=100000;
             int temp_bmu=0;
             for(int i=0;i<no_of_neurons;i++){
@@ -303,11 +351,7 @@ int main(int argc, char *argv[]){
             printf("\n BMU for data record %d is %d",row, temp_bmu);
             cudaMemcpy(d_bmu, h_bmu, 1 * sizeof(int), cudaMemcpyHostToDevice);
             */
-            ///cudaEventSynchronize
-            //mem copy of d_distances
-            //find bmu in cpu PRINT TO COMPARE WITH CPU
-            //or atomic min
-            //run a kernel to update weight mat
+
             cudaEventRecord(start);
             kernel2<<<grid_dim_k1, threads_per_block_k1>>>(d_traindate, d_weight_matrix, d_bmu,  no_of_features, d_lrate, d_radius, som_dim, row);
             cudaEventRecord(stop);
@@ -331,8 +375,11 @@ int main(int argc, char *argv[]){
 
     cudaMemcpy(d_traindata_class, traindata_class, no_of_training_data*1 * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_hit_map, hitmap, no_of_neurons* no_of_classes * sizeof(float), cudaMemcpyHostToDevice);
+
+
     begin = clock();
     /*
+    //serial
     for(int row = 0; row < no_of_training_data; row++)//no_of_training_data
     {
               //for a  given data record, find the L1 distance to each neuron in SOM
@@ -357,27 +404,28 @@ int main(int argc, char *argv[]){
     //printf("grid_dim_k1 %d threads_per_block_k1 %d",grid_dim_k1, threads_per_block_k1);
     for(int row = 0; row < no_of_training_data; row++)//no_of_training_data
     {
-              //for a  given data record, find the L1 distance to each neuron in SOM
-              //printf("For data record: %d ", row);
               cudaEventRecord(start);
               kernel4<<<grid_dim_k1, threads_per_block_k1>>>(d_traindate, d_traindata_class, d_hit_map, d_weight_matrix, row,d_distances,d_bmu,  no_of_features, no_of_neurons, no_of_classes, traindata_class[row]);
               cudaEventRecord(stop);
               cudaEventSynchronize(stop);
-              //printf("\n");
 
     }
-    cudaMemcpy(hitmap, d_hit_map, no_of_neurons* no_of_classes * sizeof(int), cudaMemcpyDeviceToHost);
-
-
+    cudaMemcpy(hitmap, d_hit_map, no_of_neurons* no_of_classes * sizeof(float), cudaMemcpyDeviceToHost);
     end = clock();
   	double elapsed_secs_calculating_hitmap = double(end - begin) / CLOCKS_PER_SEC;
 
     cout << endl;
     //print_hits(som_dim*som_dim, no_of_classes, hitmap);
+    begin = clock();
+    cudaEventRecord(start);
+    kernel5<<<grid_dim_k1, threads_per_block_k1>>>(d_hit_map, no_of_features, no_of_neurons,d_class_list,no_of_classes);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    end = clock();
+    cudaMemcpy(class_list, d_class_list, no_of_neurons * sizeof(float), cudaMemcpyDeviceToHost);
+    double elapsed_secs_calculating_class_assignment2 = double(end - begin) / CLOCKS_PER_SEC;
 
     begin = clock();
-    //started = std::chrono::high_resolution_clock::now();
-
     int max=0;
     int max_idx=0;
     int tot=0;
@@ -388,16 +436,14 @@ int main(int argc, char *argv[]){
                 max = hitmap[neu  * no_of_classes + col];
                 max_idx = col;
             }
-
         }
         class_list[neu] = max_idx;
-        //printf("class %d \n", class_list[neu]);
+        //printf("class %f \n", class_list[neu]);
         tot+=max;
     }
 
     end = clock();
   	double elapsed_secs_calculating_class_assignment = double(end - begin) / CLOCKS_PER_SEC;
-
 
     printf("No of training data %d: train acc: %f \n", no_of_training_data, tot/float(no_of_training_data));
 
@@ -466,13 +512,28 @@ int main(int argc, char *argv[]){
     end = clock();
   	double elapsed_secs_testing_accuracy_calc = double(end - begin) / CLOCKS_PER_SEC;
 
+    int threads_per_block_k5 = 1024;
+    int grid_dim_k5 = (no_of_training_data + threads_per_block_k5 - 1) / threads_per_block_k5;
+    cudaMemcpy(d_traindate, traindata, no_of_training_data* no_of_features * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_traindata_class, traindata_class, no_of_training_data*1 * sizeof(float), cudaMemcpyHostToDevice);
+    begin = clock();
+    cudaEventRecord(start);
+    kernel6<<<grid_dim_k5, threads_per_block_k5>>>(d_traindate,d_traindata_class,d_weight_matrix, no_of_features, no_of_neurons,d_class_list,no_of_classes, d_predicted_labels,no_of_training_data);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    end = clock();
+  	double elapsed_secs_testing_accuracy_calc1 = double(end - begin) / CLOCKS_PER_SEC;
+
+
     cout << endl;
 
     printf("No of testing data %d: train acc: %f \n", no_of_training_data, correct_count/float(no_of_training_data));
     cout << "\nTraining time in Seconds (claculation weight matrix and fill the hitmap) : " << elapsed_secs_training <<endl;
     cout << "\nHitmap Calculation time in Seconds : " << elapsed_secs_calculating_hitmap <<endl;
     cout << "\nClass assignment calculation time in Seconds (find majority voted class and trin accuracy using hitmap) : " << elapsed_secs_calculating_class_assignment <<endl;
-    cout << "\nTest accuracy calculation time in Seconds : " << elapsed_secs_testing_accuracy_calc <<endl;
+    cout << "\nClass assignment calculation time in Seconds (find majority voted class using hitmap) : " << elapsed_secs_calculating_class_assignment2 <<endl;
+    cout << "\nTest accuracy calculation time in Seconds CPU : " << elapsed_secs_testing_accuracy_calc <<endl;
+    cout << "\nTest accuracy calculation time in Seconds GPU: " << elapsed_secs_testing_accuracy_calc1 <<endl;
 
 
     free(traindata);

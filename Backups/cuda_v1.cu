@@ -1,5 +1,5 @@
-//compile : g++ -o serial.exe serial.cpp -std=c++11
-//run : ./serial.exe
+//compile : nvcc -o cuda_v1 cuda_v1.cu --expt-relaxed-constexpr
+//run : ./cuda_v1
 /*
 test 1: epoches=5; som_dim=16; train_acc=72.2
 test 1: epoches=10; som_dim=16; train_acc=76.2
@@ -24,10 +24,20 @@ test 1: epoches=10; som_dim=16; train_acc=76.2
 #include <cstdlib>
 #include <chrono>
 #include <fstream>
-#include <algorithm>
 #include <sstream>
 #include <iomanip>
-
+#include <stdint.h>
+#include <iterator>
+#include<algorithm>
+#include <float.h>
+#include <math.h>
+#include <fcntl.h>
+#include <string>
+#include <bitset>
+#include <time.h>
+#include <cuComplex.h>
+#include <thrust/complex.h>
+#include <cuda_fp16.h>
 
 using namespace std;
 
@@ -49,13 +59,48 @@ void print_hits(int rows, int cols, int* array){
   }
 }
 
+__global__ void kernel1(float *d_traindate, float *d_weight_matrix, int datapoint, float *d_radius,float *d_lrate, float *d_distances,int *d_bmu, int no_of_training_data, int no_of_features){
+    int tid = blockDim.x* blockIdx.x + threadIdx.x;
+    float distance=0.0;
+    for(int i=0; i< no_of_features; i++){
+        distance+= abs (d_traindate[datapoint* no_of_features +i] - d_weight_matrix[tid * no_of_features + i ]);
+    }
+
+    d_distances[tid]=distance;
+    //printf("%f ", distance);
+    //*d_lrate=0.3;
+}
+
+__global__ void kernel2(float *d_traindate, float *d_weight_matrix, int *d_bmu,  int no_of_features, float *d_lrate, float *d_radius, int som_dim, int row){
+    int tid = blockDim.x* blockIdx.x + threadIdx.x;
+    int bmu=*d_bmu;
+    float lrate = *d_lrate;
+    float radius = *d_radius;
+
+    //printf("bmu %d lrate %f radium %f", bmu, lrate , radius );
+    int winR=bmu/som_dim;
+    int winC=(bmu%som_dim);
+
+    int currR=tid/som_dim;
+    int currC=(tid%som_dim);
+    float alpha = exp(- sqrt( ((winR-currR)*(winR-currR)) + ((winC-currC)*(winC-currC)) ) / (2*radius*radius));
+    for(int j=0; j<no_of_features ; j++){
+        d_weight_matrix[tid* no_of_features+ j]=d_weight_matrix[tid* no_of_features+ j] + ( lrate* alpha *( d_traindate[row* no_of_features + j]-d_weight_matrix[tid* no_of_features+ j]));
+    }
+
+
+
+}
+
+
 int main(int argc, char *argv[]){
 
     // defining SOM
     int som_dim, neu_dim;// SOM network size, neuDim
     float *weight_matrix; //weight matrix
-    float lrate;
-    float radius;
+    float *lrate=(float*)malloc(1*sizeof(float));
+
+    float *radius=(float*)malloc(1*sizeof(float));
     int epoches;
     int bmu;
     int *hitmap;
@@ -118,20 +163,23 @@ int main(int argc, char *argv[]){
 
     epoches=10;
     no_of_classes=10;
-    lrate=0.49;
-    som_dim = 40; //number of neuron in one dimention // 25,10(e)
+    lrate[0]=0.49;
+    printf("l rate %f", lrate[0]);
+    som_dim = 10; //number of neuron in one dimention // 25,10(e)
     neu_dim = no_of_features; // input chanels per neuron,kernel size
-    radius=som_dim/2.0;
+    radius[0]=som_dim/2.0;
     int no_of_neurons = som_dim*som_dim;
     weight_matrix = (float*)malloc( no_of_neurons * neu_dim * sizeof(float));//number of neurons
     class_list = (int*)malloc(som_dim*som_dim * sizeof(int));
     hitmap = (int*)malloc(som_dim * som_dim * no_of_classes * sizeof(int));//number of neurons
+    float *h_distance_list=(float*)malloc(no_of_neurons * sizeof(float));
 
     for(int i = 0; i< som_dim*som_dim; i++){
           for(int j=0; j< no_of_features; j++){
             weight_matrix[i* neu_dim + j] = rand()/(float)RAND_MAX;//0.0 + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(1.0-0.0)));; // initializing to a random weight
           }
           class_list[i] =0;
+          h_distance_list[i]=0.0;
     }
 
     for(int i = 0; i< som_dim*som_dim;i++){
@@ -140,6 +188,38 @@ int main(int argc, char *argv[]){
         }
     }
 
+    //device variables
+
+    float *d_lrate,*d_radius, *d_weight_matrix, *d_distances, *d_traindate, *d_traindata_class;
+    int *d_class_list, *d_hit_map;
+    int *d_bmu;
+    cudaMalloc(&d_lrate, 1 * sizeof(float));
+    cudaMalloc(&d_radius, 1 * sizeof(float));
+    cudaMalloc(&d_bmu, 1 * sizeof(int));
+    cudaMalloc(&d_weight_matrix, no_of_neurons * no_of_features * sizeof(float));
+    cudaMalloc(&d_distances, no_of_neurons * sizeof(float));
+    cudaMalloc(&d_class_list, no_of_neurons*  sizeof(int));
+    cudaMalloc(&d_hit_map, no_of_neurons* no_of_classes* sizeof(int));
+    cudaMalloc(&d_traindate, no_of_training_data* no_of_features * sizeof(float));
+    cudaMalloc(&d_traindata_class, no_of_training_data* sizeof(int));
+
+
+
+    cudaMemcpy(d_traindate, traindata, no_of_training_data* no_of_features * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_traindata_class, traindata_class, no_of_training_data * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_weight_matrix, weight_matrix, no_of_neurons* no_of_features * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_distances, h_distance_list, no_of_neurons * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_class_list, traindata_class, no_of_training_data * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_hit_map, hitmap, no_of_neurons* no_of_classes * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_lrate, lrate, 1 * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_radius, radius,1 * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_bmu, 0, 1 * sizeof(int), cudaMemcpyHostToDevice);
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    float milliseconds = 0;
+
     clock_t begin = clock();
     auto started = std::chrono::high_resolution_clock::now();
     //read and store
@@ -147,47 +227,68 @@ int main(int argc, char *argv[]){
     //print_weights(som_dim*som_dim, neu_dim, weight_matrix);
 
     //weight update using the traning trainData
-    printf("no of neurons %d\n", no_of_neurons);
+    int threads_per_block_k1 = 32;
+    int grid_dim_k1 = (no_of_neurons + threads_per_block_k1 - 1) / threads_per_block_k1;
+
+
+    printf("no of neurons %d", no_of_neurons);
     for (int epoch=0; epoch<epoches; epoch++)//epoches
     {
-        lrate = 0.49*(1-(epoch/epoches))+0.01;
         cout << " epoch" << epoch << endl;
-        std::random_shuffle(nums, nums + no_of_training_data);
+        lrate[0]= 0.49*(1-(epoch/epoches))+0.01;
+        cudaMemcpy(d_lrate, lrate, 1 * sizeof(float), cudaMemcpyHostToDevice);
+
         for(int row = 0; row < no_of_training_data; row++)//no_of_training_data
         {
-            int rid = nums [row];
-            float *distances = (float*)malloc(no_of_neurons * sizeof(float));
-            float min_dis=100000.0;
-            int min_idx=-1;
+
+            //run a kernel to calculate distance to evey neu
+            cudaEventRecord(start);
+            kernel1<<<grid_dim_k1, threads_per_block_k1>>>(d_traindate, d_weight_matrix, row,d_radius,d_lrate, d_distances,d_bmu, no_of_training_data, no_of_features);
+            cudaMemcpy(h_distance_list, d_distances, no_of_neurons * sizeof(float), cudaMemcpyDeviceToHost);
+            cudaEventRecord(stop);
+            cudaEventSynchronize(stop);
+            int temp_min_dis=100000;
+            int temp_bmu=0;
+            for(int i=0;i<no_of_neurons;i++){
+              if(h_distance_list[i]<temp_min_dis){
+                temp_min_dis = h_distance_list[i];
+                temp_bmu = i;
+              }
+            }
+            int *h_bmu=(int*)malloc(sizeof(int));
+            h_bmu[0]=temp_bmu;
+            //printf("\n BMU for data record %d is %d",row, temp_bmu);
+            cudaMemcpy(d_bmu, h_bmu, 1 * sizeof(int), cudaMemcpyHostToDevice);
+            ///cudaEventSynchronize
+            //mem copy of d_distances
+            //find bmu in cpu PRINT TO COMPARE WITH CPU
+            //or atomic min
+            //run a kernel to update weight mat
+            cudaEventRecord(start);
+            kernel2<<<grid_dim_k1, threads_per_block_k1>>>(d_traindate, d_weight_matrix, d_bmu,  no_of_features, d_lrate, d_radius, som_dim, row);
+            cudaEventRecord(stop);
+            cudaEventSynchronize(stop);
+
             for(int neu=0; neu<no_of_neurons; neu++){
-                distances[neu]=0.0;
-                for(int col=0; col< no_of_features; col++){
-                    distances[neu] += abs( traindata[row* no_of_features + col] - weight_matrix[ neu * no_of_features + col]) ;
-                }
-                if(distances[neu]<=min_dis){
-                    min_dis = distances[neu];
-                    min_idx = neu;
-                }
+
             }
-            //printf("data record %d bmu %d",row,min_idx);
-            int winR=min_idx/som_dim;
-            int winC=(min_idx%som_dim);
+            //int winR=min_idx/som_dim;
+            ///int winC=(min_idx%som_dim);
             for(int i = 0; i< som_dim*som_dim ; i++){
-                int currR=i/som_dim;
-                int currC=(i%som_dim);
-                float alpha = exp(- sqrt( ((winR-currR)*(winR-currR)) + ((winC-currC)*(winC-currC)) ) / (2*radius*radius));
-                for(int j=0; j<no_of_features ; j++){
-                    weight_matrix[i* no_of_features+ j]=weight_matrix[i* no_of_features+ j] + ( lrate* alpha *( traindata[row* no_of_features + j]-weight_matrix[i* no_of_features+ j]));
-                }
+
             }
+
         }
 
-        if(radius/2.0 <=0)
-          radius = 1;
+        if(radius[0]/2.0 <=0)
+          radius[0] = 1;
         else
-          radius = radius/2.0;
+          radius[0] = radius[0]/2.0;
+        cudaMemcpy(d_radius, radius,1 * sizeof(float), cudaMemcpyHostToDevice);
+
 
         if(epoch ==epoches-1){
+              cudaMemcpy(weight_matrix, d_weight_matrix, no_of_neurons* no_of_features * sizeof(float), cudaMemcpyDeviceToHost);
               for(int row = 0; row < no_of_training_data; row++)//no_of_training_data
               {
                   //for a  given data record, find the L1 distance to each neuron in SOM
@@ -213,6 +314,7 @@ int main(int argc, char *argv[]){
 
     clock_t end = clock();
   	double elapsed_secs_training = double(end - begin) / CLOCKS_PER_SEC;
+
 
 
     cout << endl;
@@ -315,7 +417,7 @@ int main(int argc, char *argv[]){
     cout << "\nTraining time in Seconds (claculation weight matrix and fill the hitmap) : " << elapsed_secs_training <<endl;
     cout << "\nClass assignment calculation time in Seconds (find majority voted class and trin accuracy using hitmap) : " << elapsed_secs_calculating_class_assignment <<endl;
     cout << "\nTest accuracy calculation time in Seconds : " << elapsed_secs_testing_accuracy_calc <<endl;
-    cout << "\n Total runtime : " << elapsed_secs_training+elapsed_secs_calculating_class_assignment+elapsed_secs_testing_accuracy_calc <<endl;
+
 
     free(traindata);
 

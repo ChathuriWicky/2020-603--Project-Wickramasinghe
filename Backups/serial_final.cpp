@@ -119,7 +119,7 @@ int main(int argc, char *argv[]){
     epoches=10;
     no_of_classes=10;
     lrate=0.49;
-    som_dim = 40; //number of neuron in one dimention // 25,10(e)
+    som_dim = 10; //number of neuron in one dimention // 25,10(e)
     neu_dim = no_of_features; // input chanels per neuron,kernel size
     radius=som_dim/2.0;
     int no_of_neurons = som_dim*som_dim;
@@ -147,7 +147,7 @@ int main(int argc, char *argv[]){
     //print_weights(som_dim*som_dim, neu_dim, weight_matrix);
 
     //weight update using the traning trainData
-    printf("no of neurons %d\n", no_of_neurons);
+    printf("no of neurons %d", no_of_neurons);
     for (int epoch=0; epoch<epoches; epoch++)//epoches
     {
         lrate = 0.49*(1-(epoch/epoches))+0.01;
@@ -162,14 +162,13 @@ int main(int argc, char *argv[]){
             for(int neu=0; neu<no_of_neurons; neu++){
                 distances[neu]=0.0;
                 for(int col=0; col< no_of_features; col++){
-                    distances[neu] += abs( traindata[row* no_of_features + col] - weight_matrix[ neu * no_of_features + col]) ;
+                    distances[neu] += abs( traindata[rid* no_of_features + col] - weight_matrix[ neu * no_of_features + col]) ;
                 }
                 if(distances[neu]<=min_dis){
                     min_dis = distances[neu];
                     min_idx = neu;
                 }
             }
-            //printf("data record %d bmu %d",row,min_idx);
             int winR=min_idx/som_dim;
             int winC=(min_idx%som_dim);
             for(int i = 0; i< som_dim*som_dim ; i++){
@@ -177,7 +176,7 @@ int main(int argc, char *argv[]){
                 int currC=(i%som_dim);
                 float alpha = exp(- sqrt( ((winR-currR)*(winR-currR)) + ((winC-currC)*(winC-currC)) ) / (2*radius*radius));
                 for(int j=0; j<no_of_features ; j++){
-                    weight_matrix[i* no_of_features+ j]=weight_matrix[i* no_of_features+ j] + ( lrate* alpha *( traindata[row* no_of_features + j]-weight_matrix[i* no_of_features+ j]));
+                    weight_matrix[i* no_of_features+ j]=weight_matrix[i* no_of_features+ j] + ( lrate* alpha *( traindata[rid* no_of_features + j]-weight_matrix[i* no_of_features+ j]));
                 }
             }
         }
@@ -216,7 +215,7 @@ int main(int argc, char *argv[]){
 
 
     cout << endl;
-    //print_hits(som_dim*som_dim, no_of_classes, hitmap);
+    print_hits(som_dim*som_dim, no_of_classes, hitmap);
 
     begin = clock();
     //started = std::chrono::high_resolution_clock::now();
@@ -234,7 +233,7 @@ int main(int argc, char *argv[]){
 
         }
         class_list[neu] = max_idx;
-        //printf("class %d \n", class_list[neu]);
+        printf("class %d \n", class_list[neu]);
         tot+=max;
     }
 
@@ -315,7 +314,7 @@ int main(int argc, char *argv[]){
     cout << "\nTraining time in Seconds (claculation weight matrix and fill the hitmap) : " << elapsed_secs_training <<endl;
     cout << "\nClass assignment calculation time in Seconds (find majority voted class and trin accuracy using hitmap) : " << elapsed_secs_calculating_class_assignment <<endl;
     cout << "\nTest accuracy calculation time in Seconds : " << elapsed_secs_testing_accuracy_calc <<endl;
-    cout << "\n Total runtime : " << elapsed_secs_training+elapsed_secs_calculating_class_assignment+elapsed_secs_testing_accuracy_calc <<endl;
+
 
     free(traindata);
 
